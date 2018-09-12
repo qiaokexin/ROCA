@@ -1,0 +1,332 @@
+import time
+import math
+import decimal
+import sys
+
+debug = False
+
+# display matrix picture with 0 and X
+def matrix_overview(BB, bound):
+    for ii in range(BB.dimensions()[0]):
+        a = ('%02d ' % ii)
+        for jj in range(BB.dimensions()[1]):
+            a += '0' if BB[ii,jj] == 0 else 'X'
+            a += ' '
+        if BB[ii, ii] >= bound:
+            a += '~'
+        print a
+
+def coppersmith_howgrave_univariate(pol, modulus, beta, mm, tt, XX):
+    """
+    Coppersmith revisited by Howgrave-Graham
+    
+    finds a solution if:
+    * b|modulus, b >= modulus^beta , 0 < beta <= 1
+    * |x| < XX
+    """
+    #
+    # init
+    #
+    dd = pol.degree()
+    nn = dd * mm + tt
+
+    #
+    # checks
+    #
+    if not 0 < beta <= 1:
+        raise ValueError("beta should belongs in (0, 1]")
+
+    if not pol.is_monic():
+        raise ArithmeticError("Polynomial must be monic.")
+
+    #
+    # calculate bounds and display them
+    #
+    """
+    * we want to find g(x) such that ||g(xX)|| <= b^m / sqrt(n)
+    * we know LLL will give us a short vector v such that:
+    ||v|| <= 2^((n - 1)/4) * det(L)^(1/n)
+    * we will use that vector as a coefficient vector for our g(x)
+    
+    * so we want to satisfy:
+    2^((n - 1)/4) * det(L)^(1/n) < N^(beta*m) / sqrt(n)
+    
+    so we can obtain ||v|| < N^(beta*m) / sqrt(n) <= b^m / sqrt(n)
+    (it's important to use N because we might not know b)
+    """
+    if debug:
+        # t optimized?
+        print "\n# Optimized t?\n"
+        print "we want X^(n-1) < N^(beta*m) so that each vector is helpful"
+        cond1 = RR(XX^(nn-1))
+        print "* X^(n-1) = ", cond1
+        cond2 = pow(modulus, beta*mm)
+        print "* N^(beta*m) = ", cond2
+        print "* X^(n-1) < N^(beta*m) \n-> GOOD" if cond1 < cond2 else "* X^(n-1) >= N^(beta*m) \n-> NOT GOOD"
+        
+        # bound for X
+        print "\n# X bound respected?\n"
+        print "we want X <= N^(((2*beta*m)/(n-1)) - ((delta*m*(m+1))/(n*(n-1)))) / 2 = M"
+        print "* X =", XX
+        cond2 = RR(modulus^(((2*beta*mm)/(nn-1)) - ((dd*mm*(mm+1))/(nn*(nn-1)))) / 2)
+        print "* M =", cond2
+        print "* X <= M \n-> GOOD" if XX <= cond2 else "* X > M \n-> NOT GOOD"
+
+        # solution possible?
+        print "\n# Solutions possible?\n"
+        detL = RR(modulus^(dd * mm * (mm + 1) / 2) * XX^(nn * (nn - 1) / 2))
+        print "we can find a solution if 2^((n - 1)/4) * det(L)^(1/n) < N^(beta*m) / sqrt(n)"
+        cond1 = RR(2^((nn - 1)/4) * detL^(1/nn))
+        print "* 2^((n - 1)/4) * det(L)^(1/n) = ", cond1
+        cond2 = RR(modulus^(beta*mm) / sqrt(nn))
+        print "* N^(beta*m) / sqrt(n) = ", cond2
+        print "* 2^((n - 1)/4) * det(L)^(1/n) < N^(beta*m) / sqrt(n) \n-> SOLUTION WILL BE FOUND" if cond1 < cond2 else "* 2^((n - 1)/4) * det(L)^(1/n) >= N^(beta*m) / sqroot(n) \n-> NO SOLUTIONS MIGHT BE FOUND (but we never know)"
+
+        # warning about X
+        print "\n# Note that no solutions will be found _for sure_ if you don't respect:\n* |root| < X \n* b >= modulus^beta\n"
+    
+    #
+    # Coppersmith revisited algo for univariate
+    #
+
+    # change ring of pol and x
+    polZ = pol.change_ring(ZZ)
+    x = polZ.parent().gen()
+
+    # compute polynomials
+    gg = []
+    for ii in range(mm):
+        for jj in range(dd):
+            gg.append((x * XX)**jj * modulus**(mm - ii) * polZ(x * XX)**ii)
+    for ii in range(tt):
+        gg.append((x * XX)**ii * polZ(x * XX)**mm)
+    
+    # construct lattice B
+    BB = Matrix(ZZ, nn)
+
+    for ii in range(nn):
+        for jj in range(ii+1):
+            BB[ii, jj] = gg[ii][jj]
+
+    # display basis matrix
+    if debug:
+        matrix_overview(BB, modulus^mm)
+
+    # LLL
+    BB = BB.LLL()
+
+    # transform shortest vector in polynomial    
+    new_pol = 0
+    for ii in range(nn):
+        new_pol += x**ii * BB[0, ii] / XX**ii
+
+    # factor polynomial
+    potential_roots = new_pol.roots()
+    if debug:
+        print "potential roots:", potential_roots
+
+    # test roots
+    roots = []
+    for root in potential_roots:
+        if root[0].is_integer():
+            result = polZ(ZZ(root[0]))
+            if gcd(modulus, result) >= modulus^beta:
+                roots.append(ZZ(root[0]))
+
+    # 
+    return roots
+
+def P_pound(n):
+    M=1
+    p=1
+    for i in range(1,n+1):
+        p=next_prime(p)
+        M=M*p
+    return M
+
+def discrete_log65537(N, M):
+    
+    R=IntegerModRing(M)
+
+    a=R(65537)
+    b=R(mod(N,M))
+
+    c=discrete_log(b,a)
+    return c
+
+def order(M):
+    ZmodM=Zmod(M)
+    g=ZmodM(65537)
+    return g.multiplicative_order()
+
+def alg2(M, ord1):
+    M1 = M
+    fact = factor(M)
+    for i in range(0, len(fact)):
+        p = fact[i][0]
+        ord_p = order(p)
+        if not ord_p.divides(ord1):
+            M1 = M1 / p
+    return ZZ(M1)
+
+def greedy(N):
+    
+    if (len(bin(N))-2 == 512):
+        M_old = P_pound(39)
+    elif (len(bin(N))-2) == 1024:
+        M_old = P_pound(71)
+    elif (len(bin(N))-2)==2048:
+        M_old = P_pound(126)
+    elif (len(bin(N))-2)==3072:
+        M_old = P_pound(126)
+    elif (len(bin(N))-2)==4096:
+        M_old = P_pound(225)
+    else:
+        M_old=P_pound(39)
+        print('Not a standard RSA modulus N')
+    M_store = M_old
+
+    #print('find optimized M: ')
+    itr = 1;
+    
+    while math.log(M_old)/math.log(2) > math.log(N)/math.log(2) / 4:
+        #print('itr = ' + str(itr))
+	#print('M_old ' + str(M_old))
+        fact = factor(order(M_old))
+        
+        reward_at_cost = []
+        divisor_list = []
+	M_new_list = []
+        for i in range(0, len(fact)):
+            for j in range(1, fact[i][1] + 1):
+                divisor = fact[i][0] ** j
+                divisor_list.append(divisor)
+                ord1 = order(M_old)/divisor
+                M_new = alg2(M_old, ord1)
+		M_new_list.append(M_new)
+                rac = (math.log(order(M_old)) - math.log(order(M_new))) / (math.log(M_old) - math.log(M_new))
+		
+                reward_at_cost.append(rac)
+	
+        itr_divisor = divisor_list[reward_at_cost.index(max(reward_at_cost))]
+	#print(itr_divisor)
+        M_store = M_old
+        M_old = M_new_list[reward_at_cost.index(max(reward_at_cost))]
+        itr = itr + 1
+    #print('optimized M is ' + str(M_store))
+    return M_store
+
+
+            
+def factorN( ipart, parts): 
+    try:
+        c1 = discrete_log65537(N, M1) # test of whether N is vulnarable to ROCA
+        print('discrete logarithm c1 is '+str(c1))
+    except ZeroDivisionError:
+        print("N is not vulnerable to ROCA ^_^")
+        return
+    start_time = time.time()
+    
+    #logitr = math.log(ord1/2)/math.log(2)
+    
+    
+    #base_a1 = ceil(c1 / 2) - 1
+    base_a1 = 0
+    
+    #base_b1 = ceil((c1+ord1)/2) + 1
+    #base_b1 = ceil(c1 / 2)
+    base_b1 = ord1
+
+    print('a1 '+str(base_a1))
+    print('b1 '+str(base_b1))
+    logitr = math.log(base_b1-base_a1)/math.log(2)
+    print('there would be 2 ^ ' + str(logitr) + ' attempts (worst case)')
+    
+    #parts = 1
+    perpart = (base_b1 - base_a1) / parts
+
+    #ipart = 0
+    a1 = ceil(base_a1 + ipart * perpart)
+    end_a1 = ceil(a1 + perpart)
+    
+    print('start a1 ' + str(a1))
+    print('  end a1 ' + str(end_a1))
+
+    P.<x> = PolynomialRing(Zmod(N))
+
+    while a1 < end_a1:
+        pol = x + Mod(M1invers * power_mod(65537,a1,M1), N)
+        roots = coppersmith_howgrave_univariate(pol, N, beta, m, t, X)
+        if roots == []:
+            a1 = a1 + 1
+        else:
+            print('nontrivial roots')
+            for k1 in roots:
+                p = k1 * M1 + power_mod(65537, a1, M1)
+                if mod(N, p) == 0:
+                    print("a1 = " + str(a1))
+                    print("root k1 = " + str(k1))
+                    print('Prime factor of N is ' + str(hex(p)))
+                    print("in: %s seconds" % (time.time() - start_time))
+                    return p
+            a1 = a1 + 1
+    print('Not found factor of N in this part')
+    print("in: %s seconds" % (time.time() - start_time))
+    return
+
+def testN(): 
+    try:
+        c1 = discrete_log65537(N, M1) # test of whether N is vulnarable to ROCA
+        #print('N is vulnerable to ROCA')
+        return 1
+    except ZeroDivisionError:
+        #print("N is not vulnerable to ROCA ^_^")
+        return 0
+
+
+#N is given here:
+#N=0x9EE1F43CD195087AEEAAD4744A6AAC7119D7B6005B502414ECECFE2B7F3D609F5EFB7FEE9ABACEE8C2BE8D508DFA15A837DD249FEA403A135B569C94DE1DB509
+N=0x92140EC03119F7C7081AB17300227439BA2D785CB249F37FC06E233BC099557693B345AA64E4C1B20D0EAFE0DEB6906F593286D50C48F229E76E267DE80AD839
+#N=0x92140EC03119F7C7081AB17300227439BA2D7
+#N=0x965B730134EA3210F5C53D6DE4B989CB8E0130AA2B75918C8419E8B461DFD00C2B1C7607C592C001BCEA992D008A6A61BB27108C535DFC2EE998D46F8D4FBD7B
+#N=0x944166CF27066E6DB041F3E2A4D744A1891B695E46A901AB4CE3F4CD755CD077A4314EB1010B70A4C843AF3E875939EB69E3C1A3AC50D34176639B32BF03790B
+
+M1=greedy(N)
+if testN()==0:
+    print('N = ' +str(hex(N)))
+    print("N is not vulnerable to ROCA ^_^")
+else:
+    print('N = ' +str(hex(N)))
+    print('N is vulnerable to ROCA')
+    print('optimized M is ' + str(M1))
+    M1invers = M1.inverse_mod(N)
+    ord1 = order(M1)
+    beta = 0.5
+    X = ceil(2*(N**beta)/M1)
+
+    if (len(bin(N))-2 == 512):
+        m = 5
+    elif (len(bin(N))-2) == 1024:
+        m = 4
+    elif (len(bin(N))-2)==2048:
+        m = 6
+    elif (len(bin(N))-2)==3072:
+        m = 25
+    elif (len(bin(N))-2)==4096:
+        m = 7
+    else:
+        m = 5
+        print('Not a standard RSA modulus N')
+
+    t = m + 1
+
+
+    print("Parameters are set.")
+    
+
+
+#@parallel
+
+#inputs = [((0, 4),{}),(( 1, 4),{}),((2, 4),{}),((3, 4),{})]
+#for a,val in sage.parallel.reference.parallel_iter(factorN,inputs):
+#    print((a,val))
